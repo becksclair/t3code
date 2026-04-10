@@ -133,8 +133,37 @@ function buildMacLauncher(electronBinaryPath) {
 }
 
 export function resolveElectronPath() {
+  // Check if we should use system electron (set by env or fallback when npm package fails)
+  const systemElectronPath = process.env.T3_SYSTEM_ELECTRON_PATH;
+  if (systemElectronPath) {
+    return systemElectronPath;
+  }
+
   const require = createRequire(import.meta.url);
-  const electronBinaryPath = require("electron");
+  let electronBinaryPath;
+  try {
+    electronBinaryPath = require("electron");
+  } catch (error) {
+    // npm electron package not installed correctly - try system electron
+    if (process.platform === "linux") {
+      // Try common system electron locations
+      const systemPaths = [
+        "/usr/lib/electron/electron",
+        "/usr/lib/electron39/electron",
+        "/usr/lib/electron40/electron",
+        "/usr/lib/electron41/electron",
+        "/usr/sbin/electron",
+      ];
+      for (const path of systemPaths) {
+        if (existsSync(path)) {
+          console.log(`[electron-launcher] Using system electron: ${path}`);
+          return path;
+        }
+      }
+    }
+    // Re-throw if we can't find a fallback
+    throw error;
+  }
 
   if (process.platform !== "darwin") {
     return electronBinaryPath;
