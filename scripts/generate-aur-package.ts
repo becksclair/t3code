@@ -81,12 +81,13 @@ function getSystemElectronVersion(): string | null {
 }
 
 function getSourceTarballUrl(): string {
-  // Try to get from git remote
+  // Try to get from origin remote
   try {
     const remoteUrl = execSync("git remote get-url origin", {
       encoding: "utf8",
       stdio: ["pipe", "pipe", "ignore"],
     }).trim();
+
     // Convert GitHub SSH URL to HTTPS tarball URL
     if (remoteUrl.includes("github.com")) {
       const match = remoteUrl.match(/github\.com[:/](.+?)\.git?$/);
@@ -101,7 +102,9 @@ function getSourceTarballUrl(): string {
   } catch {
     // Fall through to placeholder
   }
-  return "https://github.com/t3tools/t3code/archive/v${pkgver}.tar.gz";
+
+  // Fallback to upstream placeholder
+  return "https://github.com/pingdotgg/t3code/archive/v${pkgver}.tar.gz";
 }
 
 function calculateSha256(url: string): string {

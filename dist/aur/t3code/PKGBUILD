@@ -16,7 +16,7 @@ conflicts=("t3code-bin")
 
 source=("https://github.com/becksclair/t3code/archive/v0.0.15.tar.gz")
 
-sha256sums=("ec69176aa947fec24e2f4e021b1059e0286c9cf15a083b9eba548175aafa867b")
+sha256sums=("0d3d6c378ddc8f106a824cee08f1ff1741e405b651d8e253b3d091006894ca0c")
 
 install=t3code.install
 
