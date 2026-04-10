@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.t3tools.t3code</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>T3 Code</name>
+  <summary>Minimal web GUI for coding agents</summary>
+  <description>
+    <p>
+      T3 Code is a minimal web-based GUI for AI coding agents like OpenAI Codex
+      and Claude Code. It provides a clean interface for managing coding sessions,
+      viewing conversation history, and interacting with AI-powered development tools.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Web-based interface for AI coding agents</li>
+      <li>Session management and conversation history</li>
+      <li>Support for multiple AI providers (Codex, Claude)</li>
+      <li>Built-in WebSocket server for real-time communication</li>
+      <li>Native desktop integration with Electron</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">t3code.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Main application window</caption>
+    </screenshot>
+  </screenshots>
+  <url type="homepage">https://github.com/t3tools/t3code</url>
+  <url type="bugtracker">https://github.com/t3tools/t3code/issues</url>
+  <developer_name>T3 Tools</developer_name>
+  <update_contact>team@t3tools.com</update_contact>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+  </content_rating>
+  <recommends>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </recommends>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <categories>
+    <category>Development</category>
+    <category>IDE</category>
+  </categories>
+  <keywords>
+    <keyword>codex</keyword>
+    <keyword>claude</keyword>
+    <keyword>ai</keyword>
+    <keyword>coding</keyword>
+    <keyword>editor</keyword>
+    <keyword>ide</keyword>
+    <keyword>programming</keyword>
+    <keyword>development</keyword>
+  </keywords>
+</component>

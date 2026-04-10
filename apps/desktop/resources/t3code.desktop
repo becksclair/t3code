@@ -1,0 +1,17 @@
+[Desktop Entry]
+Name=T3 Code
+Comment=Minimal web GUI for coding agents (Codex, Claude)
+Exec=t3code %U
+Icon=t3code
+Type=Application
+Categories=Development;IDE;TextEditor;
+MimeType=text/plain;text/x-python;text/javascript;text/typescript;text/html;text/css;text/markdown;application/json;
+StartupNotify=true
+StartupWMClass=T3 Code
+Terminal=false
+Keywords=codex;claude;ai;coding;editor;ide;programming;development;
+Actions=NewWindow;
+
+[Desktop Action NewWindow]
+Name=New Window
+Exec=t3code --new-window %U

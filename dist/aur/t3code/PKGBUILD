@@ -1,0 +1,82 @@
+# Maintainer: T3 Code Team <team@t3tools.com>
+# This file is auto-generated. Do not edit manually.
+
+pkgname=t3code
+pkgver=0.0.15
+pkgrel=1
+pkgdesc="Minimal web GUI for coding agents (Codex, Claude)"
+arch=("x86_64" "aarch64")
+url="https://github.com/t3tools/t3code"
+license=("MIT")
+
+depends=("electron" "nodejs" "openssh")
+makedepends=("bun" "git" "python" "gcc" "make")
+provides=("t3code")
+conflicts=("t3code-bin")
+
+source=("https://github.com/becksclair/t3code/archive/v0.0.15.tar.gz")
+
+sha256sums=("ec69176aa947fec24e2f4e021b1059e0286c9cf15a083b9eba548175aafa867b")
+
+install=t3code.install
+
+prepare() {
+  cd "${srcdir}/t3code-${pkgver}"
+
+  # Install dependencies with bun
+  bun install --frozen-lockfile
+}
+
+build() {
+  cd "${srcdir}/t3code-${pkgver}"
+
+  # Build desktop app
+  export T3_SYSTEM_ELECTRON_PATH=/usr/lib/electron
+  bun run build:desktop
+}
+
+check() {
+  cd "${srcdir}/t3code-${pkgver}"
+
+  # Run smoke tests if available
+  bun run test:desktop-smoke || true
+}
+
+package() {
+  cd "${srcdir}/t3code-${pkgver}"
+
+  # Create installation directories
+  install -dm755 "${pkgdir}/usr/lib/t3code"
+  install -dm755 "${pkgdir}/usr/bin"
+  install -dm755 "${pkgdir}/usr/share/applications"
+  install -dm755 "${pkgdir}/usr/share/pixmaps"
+  install -dm755 "${pkgdir}/usr/share/metainfo"
+
+  # Copy application files
+  cp -r apps/desktop/dist-electron "${pkgdir}/usr/lib/t3code/"
+  cp -r apps/server/dist "${pkgdir}/usr/lib/t3code/server"
+  cp -r apps/web/dist "${pkgdir}/usr/lib/t3code/web" 2>/dev/null || true
+
+  # Install desktop entry
+  install -Dm644 apps/desktop/resources/t3code.desktop \
+    "${pkgdir}/usr/share/applications/t3code.desktop"
+
+  # Install icons
+  install -Dm644 apps/desktop/resources/icon.png \
+    "${pkgdir}/usr/share/pixmaps/t3code.png"
+
+  # Install AppStream metadata
+  install -Dm644 apps/desktop/resources/com.t3tools.t3code.appdata.xml \
+    "${pkgdir}/usr/share/metainfo/com.t3tools.t3code.appdata.xml"
+
+  # Create wrapper script that uses system electron
+  cat > "${pkgdir}/usr/bin/t3code" << 'EOF'
+#!/bin/bash
+# T3 Code launcher - uses system electron
+
+export T3_SYSTEM_ELECTRON_PATH=/usr/lib/electron
+exec /usr/lib/electron/electron /usr/lib/t3code/dist-electron/main.js "$@"
+EOF
+
+  chmod +x "${pkgdir}/usr/bin/t3code"
+}
