@@ -9,9 +9,9 @@ cd "${SCRIPT_DIR}"
 echo "🧪 Testing PKGBUILD..."
 
 # Validate PKGBUILD syntax
-if command -v namcap &> /dev/null; then
+if [[ -x /usr/bin/namcap ]]; then
   echo "🔍 Running namcap on PKGBUILD..."
-  namcap PKGBUILD
+  /usr/bin/namcap PKGBUILD
 else
   echo "⚠️  namcap not installed (sudo pacman -S namcap)"
 fi

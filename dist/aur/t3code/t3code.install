@@ -1,24 +1,15 @@
-#!/bin/bash
-# T3 Code install script
-
 post_install() {
-  echo "T3 Code has been installed."
-  echo ""
-  echo "To launch: run 't3code' from your terminal or use the desktop entry."
-  echo ""
-  echo "Note: This package uses system electron. If you encounter issues,"
-  echo "ensure your system electron version is compatible."
+  cat <<'MSG'
+T3 Code installed successfully.
+
+Launch with:
+  t3code
+
+Note: this package uses system Electron and disables built-in auto-updates.
+Updates are managed through pacman/AUR.
+MSG
 }
 
 post_upgrade() {
   post_install
-}
-
-pre_remove() {
-  # Clean up any running instances
-  pkill -f "t3code" 2>/dev/null || true
-}
-
-post_remove() {
-  echo "T3 Code has been removed."
 }

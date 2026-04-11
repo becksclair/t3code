@@ -6,8 +6,8 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -23,6 +23,154 @@ const LAUNCHER_VERSION = 1;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const desktopDir = resolve(__dirname, "..");
+
+function resolvePreferredElectronMajor() {
+  try {
+    const desktopPackageJson = JSON.parse(readFileSync(join(desktopDir, "package.json"), "utf8"));
+    const electronVersion = desktopPackageJson?.dependencies?.electron;
+    const major = Number.parseInt(String(electronVersion ?? "").split(".")[0] ?? "", 10);
+    return Number.isInteger(major) && major > 0 ? major : null;
+  } catch {
+    return null;
+  }
+}
+
+const preferredElectronMajor = resolvePreferredElectronMajor();
+
+function getSystemElectronCommands() {
+  const commands = [];
+  if (preferredElectronMajor !== null) {
+    commands.push(`electron${preferredElectronMajor}`);
+  }
+  commands.push("electron");
+  return [...new Set(commands)];
+}
+
+function getSystemElectronPaths() {
+  const paths = [];
+  if (preferredElectronMajor !== null) {
+    paths.push(`/usr/lib/electron${preferredElectronMajor}/electron`);
+    paths.push(`/usr/sbin/electron${preferredElectronMajor}`);
+  }
+  paths.push("/usr/lib/electron/electron");
+  paths.push("/usr/sbin/electron");
+  return [...new Set(paths)];
+}
+
+export function resolveLinuxDisplayBackend(env = process.env) {
+  if (process.platform !== "linux") {
+    return null;
+  }
+
+  const sessionType = env.XDG_SESSION_TYPE?.trim().toLowerCase();
+  if (sessionType === "wayland") {
+    return "wayland";
+  }
+  if (sessionType === "x11") {
+    return "x11";
+  }
+  if (env.WAYLAND_DISPLAY) {
+    return "wayland";
+  }
+  if (env.DISPLAY) {
+    return "x11";
+  }
+  return null;
+}
+
+function hasLikelyNvidiaWaylandExternalDisplay(env = process.env) {
+  if (process.platform !== "linux") {
+    return false;
+  }
+
+  const displayBackend = resolveLinuxDisplayBackend(env);
+  if (displayBackend !== "wayland") {
+    return false;
+  }
+
+  const hasNvidiaSignal =
+    env.__NV_PRIME_RENDER_OFFLOAD === "1" ||
+    env.DRI_PRIME === "1" ||
+    (typeof env.NVIDIA_VISIBLE_DEVICES === "string" &&
+      env.NVIDIA_VISIBLE_DEVICES.length > 0 &&
+      env.NVIDIA_VISIBLE_DEVICES !== "none") ||
+    existsSync("/proc/driver/nvidia/version") ||
+    existsSync("/sys/module/nvidia/version");
+
+  if (!hasNvidiaSignal) {
+    return false;
+  }
+
+  try {
+    const drmEntries = readdirSync("/sys/class/drm", { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .filter((name) => /^(card\d+)-/.test(name));
+
+    for (const entryName of drmEntries) {
+      const statusPath = `/sys/class/drm/${entryName}/status`;
+      if (!existsSync(statusPath)) {
+        continue;
+      }
+
+      const status = readFileSync(statusPath, "utf8").trim().toLowerCase();
+      if (status !== "connected") {
+        continue;
+      }
+
+      const connectorName = entryName.toLowerCase();
+      const isInternalDisplay =
+        connectorName.includes("edp") ||
+        connectorName.includes("lvds") ||
+        connectorName.includes("dsi");
+      if (!isInternalDisplay) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+
+  return false;
+}
+
+function parseElectronFlags(rawFlags) {
+  if (typeof rawFlags !== "string") {
+    return [];
+  }
+
+  return rawFlags
+    .split(/\s+/)
+    .map((flag) => flag.trim())
+    .filter((flag) => flag.length > 0);
+}
+
+export function resolveElectronLaunchArgs(appEntrypoint, appArgs = [], env = process.env) {
+  const launchArgs = [];
+  let displayBackend = resolveLinuxDisplayBackend(env);
+
+  const hasExplicitOzonePlatform = parseElectronFlags(env.T3CODE_ELECTRON_FLAGS).some((flag) =>
+    /^--ozone-platform(=|$)/.test(flag),
+  );
+
+  if (!hasExplicitOzonePlatform && hasLikelyNvidiaWaylandExternalDisplay(env)) {
+    displayBackend = "x11";
+  }
+
+  if (displayBackend === "wayland") {
+    launchArgs.push(
+      "--ozone-platform=wayland",
+      "--enable-features=WaylandWindowDecorations",
+      "--disable-features=Vulkan",
+    );
+  } else if (displayBackend === "x11") {
+    launchArgs.push("--ozone-platform=x11");
+  }
+
+  launchArgs.push(...parseElectronFlags(env.T3CODE_ELECTRON_FLAGS));
+  launchArgs.push(appEntrypoint, ...appArgs);
+  return launchArgs;
+}
 
 function setPlistString(plistPath, key, value) {
   const replaceResult = spawnSync("plutil", ["-replace", key, "-string", value, plistPath], {
@@ -132,6 +280,32 @@ function buildMacLauncher(electronBinaryPath) {
   return targetBinaryPath;
 }
 
+export function resolveSystemElectronCommand() {
+  const explicitPath = process.env.T3_SYSTEM_ELECTRON_PATH?.trim();
+  if (explicitPath) {
+    return explicitPath;
+  }
+
+  try {
+    return resolveElectronPath();
+  } catch (error) {
+    if (process.platform === "linux") {
+      for (const command of getSystemElectronCommands()) {
+        const result = spawnSync("sh", ["-lc", `command -v ${command}`], {
+          encoding: "utf8",
+        });
+        const resolvedPath = result.stdout?.trim();
+        if (result.status === 0 && resolvedPath) {
+          console.log(`[electron-launcher] Falling back to system electron: ${resolvedPath}`);
+          return resolvedPath;
+        }
+      }
+    }
+
+    throw error;
+  }
+}
+
 export function resolveElectronPath() {
   // Check if we should use system electron (set by env or fallback when npm package fails)
   const systemElectronPath = process.env.T3_SYSTEM_ELECTRON_PATH;
@@ -146,21 +320,25 @@ export function resolveElectronPath() {
   } catch (error) {
     // npm electron package not installed correctly - try system electron
     if (process.platform === "linux") {
-      // Try common system electron locations
-      const systemPaths = [
-        "/usr/lib/electron/electron",
-        "/usr/lib/electron39/electron",
-        "/usr/lib/electron40/electron",
-        "/usr/lib/electron41/electron",
-        "/usr/sbin/electron",
-      ];
-      for (const path of systemPaths) {
+      for (const path of getSystemElectronPaths()) {
         if (existsSync(path)) {
           console.log(`[electron-launcher] Using system electron: ${path}`);
           return path;
         }
       }
     }
+
+    for (const command of getSystemElectronCommands()) {
+      const result = spawnSync("sh", ["-lc", `command -v ${command}`], {
+        encoding: "utf8",
+      });
+      const resolvedPath = result.stdout?.trim();
+      if (result.status === 0 && resolvedPath) {
+        console.log(`[electron-launcher] Using system electron from PATH: ${resolvedPath}`);
+        return resolvedPath;
+      }
+    }
+
     // Re-throw if we can't find a fallback
     throw error;
   }

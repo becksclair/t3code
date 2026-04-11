@@ -22,3 +22,12 @@ apps/web/src/components/__screenshots__
 __screenshots__/
 .tanstack
 squashfs-root/
+.codex
+
+# Local AUR build artefacts
+dist/aur/build-src/
+dist/aur/t3code/pkg/
+dist/aur/t3code/src/
+dist/aur/t3code/*.pkg.tar.*
+dist/aur/t3code/t3code-local-build.tar.gz
+dist/aur/t3code/runtime-dependencies.json

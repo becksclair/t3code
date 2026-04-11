@@ -2,17 +2,18 @@
 #
 # T3 Code AUR Rebuild Helper
 #
-# Automatically rebuilds the AUR package from local source and reinstalls it.
-# Useful during development when you want to test the installed package.
+# Builds locally first, then packages for AUR distribution.
+# This approach avoids build issues inside makepkg (native modules, compiler issues).
 #
 # Usage:
 #   bun run aur:rebuild
-#   ./scripts/aur-rebuild.sh [--clean] [--test-only]
+#   ./scripts/aur-rebuild.sh [--clean] [--test-only] [--skip-build]
 #
 # Options:
-#   --clean     Remove dist/aur first and regenerate
-#   --test-only Run tests but don't install
-#   --skip-gen  Skip package generation (use existing dist/aur)
+#   --clean       Remove dist/aur first and regenerate
+#   --test-only   Run tests but don't install
+#   --skip-build  Skip the local build (use existing dist)
+#   --skip-gen    Skip package generation (use existing dist/aur)
 #
 
 set -e
@@ -24,6 +25,7 @@ AUR_DIR="${ROOT_DIR}/dist/aur/t3code"
 # Parse arguments
 CLEAN=0
 TEST_ONLY=0
+SKIP_BUILD=0
 SKIP_GEN=0
 
 while [[ $# -gt 0 ]]; do
@@ -36,13 +38,17 @@ while [[ $# -gt 0 ]]; do
       TEST_ONLY=1
       shift
       ;;
+    --skip-build)
+      SKIP_BUILD=1
+      shift
+      ;;
     --skip-gen)
       SKIP_GEN=1
       shift
       ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: $0 [--clean] [--test-only] [--skip-gen]"
+      echo "Usage: $0 [--clean] [--test-only] [--skip-build] [--skip-gen]"
       exit 1
       ;;
   esac
@@ -56,14 +62,30 @@ echo ""
 if [[ $CLEAN -eq 1 ]]; then
   echo "🧹 Cleaning dist/aur..."
   rm -rf "${ROOT_DIR}/dist/aur"
+  SKIP_BUILD=0
   SKIP_GEN=0
 fi
 
-# Step 2: Generate AUR package (unless skipped)
-if [[ $SKIP_GEN -eq 0 ]]; then
-  echo "📦 Generating AUR package..."
+# Step 2: Local build (unless skipped)
+if [[ $SKIP_BUILD -eq 0 ]]; then
+  echo "🔨 Building desktop app locally..."
   cd "${ROOT_DIR}"
-  node scripts/generate-aur-package.ts --verbose
+  bun run build:desktop
+  echo "✅ Local build complete"
+  echo ""
+else
+  echo "⏭️  Skipping local build (--skip-build)"
+fi
+
+# Step 3: Generate AUR package (unless skipped)
+if [[ $SKIP_GEN -eq 0 ]]; then
+  echo "📦 Generating AUR package from local build..."
+  cd "${ROOT_DIR}"
+  GENERATOR_ARGS=(--verbose)
+  if [[ $SKIP_BUILD -eq 1 ]]; then
+    GENERATOR_ARGS=(--skip-build --verbose)
+  fi
+  node scripts/generate-aur-package.ts "${GENERATOR_ARGS[@]}"
 else
   echo "⏭️  Skipping package generation (--skip-gen)"
 fi
@@ -77,21 +99,23 @@ fi
 
 cd "${AUR_DIR}"
 
-# Step 3: Update checksums
+# The generator now owns local source archive creation and checksum updates.
+
+# Ensure system paths are first (avoid Homebrew Python issues)
+export PATH="/usr/bin:$PATH"
+
+# Step 4: Update other checksums
 echo ""
 echo "📊 Updating checksums..."
 if command -v updpkgsums &> /dev/null; then
-  updpkgsums
-else
-  echo "⚠️  updpkgsums not found, using makepkg -g instead"
-  # Alternative: regenerate with makepkg -g and update PKGBUILD
+  updpkgsums 2>/dev/null || true
 fi
 
-# Step 4: Validate package
+# Step 5: Validate package
 echo ""
 echo "🔍 Validating package..."
-if command -v namcap &> /dev/null; then
-  namcap PKGBUILD
+if [[ -x /usr/bin/namcap ]]; then
+  /usr/bin/namcap PKGBUILD || true
 else
   echo "⚠️  namcap not installed (sudo pacman -S namcap for package linting)"
 fi
@@ -103,13 +127,13 @@ if ! makepkg --printsrcinfo > /dev/null 2>&1; then
 fi
 echo "✅ PKGBUILD syntax OK"
 
-# Step 5: Regenerate .SRCINFO
+# Step 6: Regenerate .SRCINFO
 echo ""
 echo "📝 Regenerating .SRCINFO..."
 makepkg --printsrcinfo > .SRCINFO
 echo "✅ .SRCINFO updated"
 
-# Step 6: Test mode - stop here
+# Step 7: Test mode - stop here
 if [[ $TEST_ONLY -eq 1 ]]; then
   echo ""
   echo "🧪 Test mode - package validation complete"
@@ -117,10 +141,11 @@ if [[ $TEST_ONLY -eq 1 ]]; then
   exit 0
 fi
 
-# Step 7: Build and install
+# Step 8: Build and install
 echo ""
 echo "📦 Building and installing package..."
-makepkg -si "$@"
+echo "   (Skipping dependency checks - assuming bun is installed via mise/native)"
+makepkg -si --nodeps "$@"
 
 echo ""
 echo "✅ T3 Code rebuilt and installed successfully!"

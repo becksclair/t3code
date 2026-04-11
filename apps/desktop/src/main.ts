@@ -119,6 +119,7 @@ const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const DESKTOP_LOOPBACK_HOST = "127.0.0.1";
 
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
+type LinuxDisplayBackend = "wayland" | "x11";
 type LinuxDesktopNamedApp = Electron.App & {
   setDesktopName?: (desktopName: string) => void;
 };
@@ -427,6 +428,17 @@ function installStdIoCapture(): void {
   };
 }
 
+function captureBackendOutput(child: ChildProcess.ChildProcess): void {
+  if (!app.isPackaged || backendLogSink === null) return;
+  const writeChunk = (chunk: unknown): void => {
+    if (!backendLogSink) return;
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+    backendLogSink.write(buffer);
+  };
+  child.stdout?.on("data", writeChunk);
+  child.stderr?.on("data", writeChunk);
+}
+
 function initializePackagedLogging(): void {
   if (!app.isPackaged) return;
   try {
@@ -448,22 +460,193 @@ function initializePackagedLogging(): void {
   }
 }
 
-function captureBackendOutput(child: ChildProcess.ChildProcess): void {
-  if (!app.isPackaged || backendLogSink === null) return;
-  const writeChunk = (chunk: unknown): void => {
-    if (!backendLogSink) return;
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
-    backendLogSink.write(buffer);
-  };
-  child.stdout?.on("data", writeChunk);
-  child.stderr?.on("data", writeChunk);
+function resolveLinuxDisplayBackend(
+  env: NodeJS.ProcessEnv = process.env,
+): LinuxDisplayBackend | null {
+  if (process.platform !== "linux") {
+    return null;
+  }
+
+  const sessionType = env.XDG_SESSION_TYPE?.trim().toLowerCase();
+  if (sessionType === "wayland") {
+    return "wayland";
+  }
+  if (sessionType === "x11") {
+    return "x11";
+  }
+  if (env.WAYLAND_DISPLAY) {
+    return "wayland";
+  }
+  if (env.DISPLAY) {
+    return "x11";
+  }
+  return null;
+}
+
+function hasLikelyNvidiaWaylandExternalDisplay(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (process.platform !== "linux") {
+    return false;
+  }
+
+  if (resolveLinuxDisplayBackend(env) !== "wayland") {
+    return false;
+  }
+
+  const hasNvidiaSignal =
+    env.__NV_PRIME_RENDER_OFFLOAD === "1" ||
+    env.DRI_PRIME === "1" ||
+    (typeof env.NVIDIA_VISIBLE_DEVICES === "string" &&
+      env.NVIDIA_VISIBLE_DEVICES.length > 0 &&
+      env.NVIDIA_VISIBLE_DEVICES !== "none") ||
+    FS.existsSync("/proc/driver/nvidia/version") ||
+    FS.existsSync("/sys/module/nvidia/version");
+
+  if (!hasNvidiaSignal) {
+    return false;
+  }
+
+  try {
+    const connectorEntries = FS.readdirSync("/sys/class/drm", { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .filter((name) => /^(card\d+)-/.test(name));
+
+    for (const connectorEntry of connectorEntries) {
+      const statusPath = `/sys/class/drm/${connectorEntry}/status`;
+      if (!FS.existsSync(statusPath)) {
+        continue;
+      }
+
+      const status = FS.readFileSync(statusPath, "utf8").trim().toLowerCase();
+      if (status !== "connected") {
+        continue;
+      }
+
+      const connectorName = connectorEntry.toLowerCase();
+      const isInternalDisplay =
+        connectorName.includes("edp") ||
+        connectorName.includes("lvds") ||
+        connectorName.includes("dsi");
+      if (!isInternalDisplay) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+
+  return false;
+}
+
+function splitCommaSeparatedSwitchValue(rawValue: string): string[] {
+  return rawValue
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+}
+
+function hasCommaSeparatedSwitchEntry(switchName: string, expectedValue: string): boolean {
+  const currentValue = app.commandLine.getSwitchValue(switchName);
+  if (!currentValue) {
+    return false;
+  }
+
+  return splitCommaSeparatedSwitchValue(currentValue).includes(expectedValue);
+}
+
+function appendCommaSeparatedSwitchEntry(switchName: string, nextValue: string): void {
+  if (hasCommaSeparatedSwitchEntry(switchName, nextValue)) {
+    return;
+  }
+
+  const currentValue = app.commandLine.getSwitchValue(switchName);
+  const mergedValues = currentValue
+    ? [...splitCommaSeparatedSwitchValue(currentValue), nextValue]
+    : [nextValue];
+  app.commandLine.appendSwitch(switchName, [...new Set(mergedValues)].join(","));
+}
+
+function appendElectronSwitchFromToken(rawToken: string): void {
+  const token = rawToken.trim();
+  if (!token.startsWith("--")) {
+    return;
+  }
+
+  const flag = token.slice(2);
+  if (flag.length === 0) {
+    return;
+  }
+
+  const equalsIndex = flag.indexOf("=");
+  if (equalsIndex === -1) {
+    if (!app.commandLine.hasSwitch(flag)) {
+      app.commandLine.appendSwitch(flag);
+    }
+    return;
+  }
+
+  const switchName = flag.slice(0, equalsIndex);
+  const switchValue = flag.slice(equalsIndex + 1);
+  if (switchName.length === 0) {
+    return;
+  }
+
+  app.commandLine.appendSwitch(switchName, switchValue);
+}
+
+function applyLinuxChromiumLaunchDefaults(): void {
+  if (process.platform !== "linux") {
+    return;
+  }
+
+  app.commandLine.appendSwitch("class", LINUX_WM_CLASS);
+
+  const rawElectronFlags = process.env.T3CODE_ELECTRON_FLAGS?.trim();
+  if (rawElectronFlags) {
+    for (const token of rawElectronFlags.split(/\s+/)) {
+      appendElectronSwitchFromToken(token);
+    }
+  }
+
+  const displayBackend = resolveLinuxDisplayBackend();
+  const ozonePlatform = app.commandLine.getSwitchValue("ozone-platform");
+  const hasExplicitOzonePlatform = ozonePlatform !== "";
+  let effectiveDisplayBackend = displayBackend;
+
+  if (!hasExplicitOzonePlatform && hasLikelyNvidiaWaylandExternalDisplay()) {
+    effectiveDisplayBackend = "x11";
+  }
+
+  const shouldUseWayland =
+    effectiveDisplayBackend === "wayland" && (ozonePlatform === "" || ozonePlatform === "wayland");
+
+  if (effectiveDisplayBackend === "wayland" && ozonePlatform === "") {
+    app.commandLine.appendSwitch("ozone-platform", "wayland");
+  }
+
+  if (effectiveDisplayBackend === "x11" && ozonePlatform === "") {
+    app.commandLine.appendSwitch("ozone-platform", "x11");
+  }
+
+  if (
+    shouldUseWayland &&
+    !hasCommaSeparatedSwitchEntry("enable-features", "WaylandWindowDecorations") &&
+    !hasCommaSeparatedSwitchEntry("disable-features", "WaylandWindowDecorations")
+  ) {
+    appendCommaSeparatedSwitchEntry("enable-features", "WaylandWindowDecorations");
+  }
+
+  if (
+    shouldUseWayland &&
+    !hasCommaSeparatedSwitchEntry("disable-features", "Vulkan") &&
+    !hasCommaSeparatedSwitchEntry("enable-features", "Vulkan")
+  ) {
+    appendCommaSeparatedSwitchEntry("disable-features", "Vulkan");
+  }
 }
 
 initializePackagedLogging();
-
-if (process.platform === "linux") {
-  app.commandLine.appendSwitch("class", LINUX_WM_CLASS);
-}
+applyLinuxChromiumLaunchDefaults();
 
 function getDestructiveMenuIcon(): Electron.NativeImage | undefined {
   if (process.platform !== "darwin") return undefined;
@@ -515,6 +698,10 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 function resolveAppRoot(): string {
+  const overrideAppRoot = process.env.T3CODE_APP_ROOT?.trim();
+  if (overrideAppRoot) {
+    return overrideAppRoot;
+  }
   if (!app.isPackaged) {
     return ROOT_DIR;
   }

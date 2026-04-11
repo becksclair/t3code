@@ -2,7 +2,11 @@ import { spawn, spawnSync } from "node:child_process";
 import { watch } from "node:fs";
 import { join } from "node:path";
 
-import { desktopDir, resolveElectronPath } from "./electron-launcher.mjs";
+import {
+  desktopDir,
+  resolveElectronLaunchArgs,
+  resolveSystemElectronCommand,
+} from "./electron-launcher.mjs";
 import { waitForResources } from "./wait-for-resources.mjs";
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL?.trim();
@@ -36,6 +40,7 @@ await waitForResources({
   tcpPort: port,
 });
 
+const electronCommand = resolveSystemElectronCommand();
 const childEnv = { ...process.env };
 delete childEnv.ELECTRON_RUN_AS_NODE;
 
@@ -68,8 +73,12 @@ function startApp() {
   }
 
   const app = spawn(
-    resolveElectronPath(),
-    [`--t3code-dev-root=${desktopDir}`, "dist-electron/main.js"],
+    electronCommand,
+    resolveElectronLaunchArgs(
+      "dist-electron/main.js",
+      [`--t3code-dev-root=${desktopDir}`],
+      childEnv,
+    ),
     {
       cwd: desktopDir,
       env: childEnv,

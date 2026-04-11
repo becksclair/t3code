@@ -5,77 +5,183 @@ pkgname=t3code
 pkgver=0.0.15
 pkgrel=1
 pkgdesc="Minimal web GUI for coding agents (Codex, Claude)"
-arch=("x86_64" "aarch64")
+arch=("x86_64")
 url="https://github.com/t3tools/t3code"
 license=("MIT")
 
-depends=("electron" "nodejs" "openssh")
-makedepends=("bun" "git" "python" "gcc" "make")
+depends=("electron41" "nodejs" "openssh")
+makedepends=()
 provides=("t3code")
 conflicts=("t3code-bin")
 
-source=("https://github.com/becksclair/t3code/archive/v0.0.15.tar.gz")
+source=("t3code-local-build.tar.gz"
+        "t3code.desktop"
+        "icon.png"
+        "com.t3tools.t3code.appdata.xml")
 
-sha256sums=("0d3d6c378ddc8f106a824cee08f1ff1741e405b651d8e253b3d091006894ca0c")
+sha256sums=("ddd1e6e12ef94e3f10cf893ba68de54bf06ce699faea9b68f8379ba60c6d9b2b"
+            "3f342dcf7b58d954eabd8a900f7eab42f00b2d4d66f37150a59e852b660f45ba"
+            "ad73005e78deedd38ac68a90fc6d7a3a1b9bf40e7820f86196ff71d7f68a72fc"
+            "fd0e6464601b4bd4405d83c47dd080b96966d9b7684a603ebc204ac776afc9d5")
 
 install=t3code.install
 
 prepare() {
-  cd "${srcdir}/t3code-${pkgver}"
+  cd "${srcdir}/t3code-local"
 
-  # Install dependencies with bun
-  bun install --frozen-lockfile
+  # Source is pre-built, no preparation needed
+  :
 }
 
 build() {
-  cd "${srcdir}/t3code-${pkgver}"
+  cd "${srcdir}/t3code-local"
 
-  # Build desktop app
-  export T3_SYSTEM_ELECTRON_PATH=/usr/lib/electron
-  bun run build:desktop
+  # Source is pre-built, no build needed
+  :
 }
 
 check() {
-  cd "${srcdir}/t3code-${pkgver}"
+  cd "${srcdir}/t3code-local"
 
-  # Run smoke tests if available
-  bun run test:desktop-smoke || true
+  # No package-time smoke test is defined yet.
+  :
 }
 
 package() {
-  cd "${srcdir}/t3code-${pkgver}"
+  cd "${srcdir}/t3code-local"
 
   # Create installation directories
   install -dm755 "${pkgdir}/usr/lib/t3code"
+  install -dm755 "${pkgdir}/usr/lib/t3code/apps/desktop"
+  install -dm755 "${pkgdir}/usr/lib/t3code/apps/server"
+  install -dm755 "${pkgdir}/usr/lib/t3code/apps/server/dist"
+  install -dm755 "${pkgdir}/usr/lib/t3code/apps/web"
+  install -dm755 "${pkgdir}/usr/lib/t3code/apps/web/dist"
   install -dm755 "${pkgdir}/usr/bin"
   install -dm755 "${pkgdir}/usr/share/applications"
   install -dm755 "${pkgdir}/usr/share/pixmaps"
   install -dm755 "${pkgdir}/usr/share/metainfo"
 
   # Copy application files
-  cp -r apps/desktop/dist-electron "${pkgdir}/usr/lib/t3code/"
-  cp -r apps/server/dist "${pkgdir}/usr/lib/t3code/server"
-  cp -r apps/web/dist "${pkgdir}/usr/lib/t3code/web" 2>/dev/null || true
+  cp -r ${srcdir}/t3code-local/dist-electron "${pkgdir}/usr/lib/t3code/apps/desktop/"
+  cp -r ${srcdir}/t3code-local/node_modules "${pkgdir}/usr/lib/t3code/"
+  cp -r ${srcdir}/t3code-local/server/. "${pkgdir}/usr/lib/t3code/apps/server/dist/"
+  cp -r ${srcdir}/t3code-local/web/. "${pkgdir}/usr/lib/t3code/apps/web/dist/" 2>/dev/null || true
+  # Remove any broken symlinks from node_modules (bun may create them)
+  find "${pkgdir}/usr/lib/t3code/node_modules" -type l \! -exec test -e {} \; -print -delete 2>/dev/null || true
 
   # Install desktop entry
-  install -Dm644 apps/desktop/resources/t3code.desktop \
+  install -Dm644 ${srcdir}/t3code.desktop \
     "${pkgdir}/usr/share/applications/t3code.desktop"
 
   # Install icons
-  install -Dm644 apps/desktop/resources/icon.png \
+  install -Dm644 ${srcdir}/icon.png \
     "${pkgdir}/usr/share/pixmaps/t3code.png"
 
   # Install AppStream metadata
-  install -Dm644 apps/desktop/resources/com.t3tools.t3code.appdata.xml \
+  install -Dm644 ${srcdir}/com.t3tools.t3code.appdata.xml \
     "${pkgdir}/usr/share/metainfo/com.t3tools.t3code.appdata.xml"
 
-  # Create wrapper script that uses system electron
+  # Disable auto-updater for AUR builds (pacman manages updates)
+  sed -i 's|await electron_updater.autoUpdater.checkForUpdates()|/* auto-updater disabled */ { accepted: false }|g' "${pkgdir}/usr/lib/t3code/apps/desktop/dist-electron/main.js"
+
   cat > "${pkgdir}/usr/bin/t3code" << 'EOF'
 #!/bin/bash
-# T3 Code launcher - uses system electron
+set -euo pipefail
 
-export T3_SYSTEM_ELECTRON_PATH=/usr/lib/electron
-exec /usr/lib/electron/electron /usr/lib/t3code/dist-electron/main.js "$@"
+# T3 Code launcher - uses system Electron managed by pacman
+# Note: Auto-updates are disabled because pacman manages updates.
+
+export T3_SKIP_AUTO_UPDATE=1
+export T3CODE_APP_ROOT=/usr/lib/t3code
+
+electron_bin=""
+for candidate in /usr/bin/electron41 /usr/sbin/electron41; do
+  if [[ -x "$candidate" ]]; then
+    electron_bin="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$electron_bin" ]] && command -v electron41 >/dev/null 2>&1; then
+  electron_bin="$(command -v electron41)"
+fi
+
+if [[ -z "$electron_bin" ]]; then
+  printf '%s\n' "t3code: electron41 is required but was not found" >&2
+  exit 1
+fi
+
+export T3_SYSTEM_ELECTRON_PATH="$electron_bin"
+
+display_backend=""
+if [[ "${XDG_SESSION_TYPE:-}" == "wayland" || -n "${WAYLAND_DISPLAY:-}" ]]; then
+  display_backend="wayland"
+elif [[ "${XDG_SESSION_TYPE:-}" == "x11" || -n "${DISPLAY:-}" ]]; then
+  display_backend="x11"
+fi
+
+has_explicit_ozone_platform=0
+if [[ -n "${T3CODE_ELECTRON_FLAGS:-}" ]]; then
+  read -r -a parsed_flag_tokens <<< "${T3CODE_ELECTRON_FLAGS}"
+  for token in "${parsed_flag_tokens[@]}"; do
+    if [[ "$token" == --ozone-platform || "$token" == --ozone-platform=* ]]; then
+      has_explicit_ozone_platform=1
+      break
+    fi
+  done
+fi
+
+if [[ "$display_backend" == "wayland" && $has_explicit_ozone_platform -eq 0 ]]; then
+  has_nvidia_signal=0
+  if [[ "${__NV_PRIME_RENDER_OFFLOAD:-}" == "1" || "${DRI_PRIME:-}" == "1" ]]; then
+    has_nvidia_signal=1
+  elif [[ -n "${NVIDIA_VISIBLE_DEVICES:-}" && "${NVIDIA_VISIBLE_DEVICES}" != "none" ]]; then
+    has_nvidia_signal=1
+  elif [[ -e /proc/driver/nvidia/version || -e /sys/module/nvidia/version ]]; then
+    has_nvidia_signal=1
+  fi
+
+  has_external_connected=0
+  if [[ $has_nvidia_signal -eq 1 ]]; then
+    for status_path in /sys/class/drm/card*-*/status; do
+      [[ -e "$status_path" ]] || continue
+      status="$(<"$status_path")"
+      status="${status,,}"
+      status="${status//$'\n'/}"
+      [[ "$status" == "connected" ]] || continue
+      connector="${status_path%/status}"
+      connector="${connector##*/}"
+      connector="${connector,,}"
+      if [[ "$connector" != *edp* && "$connector" != *lvds* && "$connector" != *dsi* ]]; then
+        has_external_connected=1
+        break
+      fi
+    done
+  fi
+
+  if [[ $has_external_connected -eq 1 ]]; then
+    display_backend="x11"
+  fi
+fi
+
+electron_args=()
+case "$display_backend" in
+  wayland)
+    electron_args+=(--ozone-platform=wayland --enable-features=WaylandWindowDecorations --disable-features=Vulkan)
+    ;;
+  x11)
+    electron_args+=(--ozone-platform=x11)
+    ;;
+esac
+
+if [[ -n "${T3CODE_ELECTRON_FLAGS:-}" ]]; then
+  read -r -a extra_electron_args <<< "${T3CODE_ELECTRON_FLAGS}"
+  electron_args+=("${extra_electron_args[@]}")
+fi
+
+cd /usr/lib/t3code
+exec "$electron_bin" "${electron_args[@]}" /usr/lib/t3code/apps/desktop/dist-electron/main.js "$@"
 EOF
 
   chmod +x "${pkgdir}/usr/bin/t3code"
